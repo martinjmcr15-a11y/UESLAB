@@ -14,7 +14,9 @@ const PORT = 3000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-const DB_FILE = path.join(process.cwd(), "db.json");
+const DB_FILE = process.env.VERCEL 
+  ? "/tmp/db.json" 
+  : path.join(process.cwd(), "db.json");
 
 // Lazy Gemini API Client
 let aiClient: GoogleGenAI | null = null;
@@ -138,8 +140,17 @@ const DEFAULT_DB = {
 function readDb() {
   try {
     if (!fs.existsSync(DB_FILE)) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(DEFAULT_DB, null, 2), "utf8");
-      return DEFAULT_DB;
+      let initialData = DEFAULT_DB;
+      const localDbFile = path.join(process.cwd(), "db.json");
+      if (fs.existsSync(localDbFile)) {
+        try {
+          initialData = JSON.parse(fs.readFileSync(localDbFile, "utf8"));
+        } catch (e) {
+          console.error("Failed to parse local db.json", e);
+        }
+      }
+      fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2), "utf8");
+      return initialData;
     }
     const data = fs.readFileSync(DB_FILE, "utf8");
     const db = JSON.parse(data);
@@ -605,6 +616,24 @@ app.get("/api/auth/admins", (req, res) => {
   res.json(db.admins || []);
 });
 
+app.delete("/api/auth/admins/:id", (req, res) => {
+  const { id } = req.params;
+  if (id === "admin-default") {
+    return res.status(400).json({ error: "No se puede eliminar el administrador principal por motivos de seguridad escolar." });
+  }
+
+  const db = readDb();
+  if (!db.admins) db.admins = [];
+  const idx = db.admins.findIndex(adm => adm.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ error: "Administrador no encontrado." });
+  }
+
+  db.admins.splice(idx, 1);
+  writeDb(db);
+  res.json({ success: true });
+});
+
 app.post("/api/auth/register-admin", (req, res) => {
   const { name, expediente, password } = req.body;
   if (!name || !expediente || !password) {
@@ -781,4 +810,8 @@ async function startServer() {
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;

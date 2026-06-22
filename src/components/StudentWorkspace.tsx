@@ -444,7 +444,7 @@ export default function StudentWorkspace({
             <button
               id="student-logout-top"
               onClick={onLogout}
-              className="px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 rounded-md border border-slate-700 hover:border-slate-600 transition inline-flex items-center gap-1.5 shadow"
+              className="px-3 py-1.5 text-xs font-semibold text-slate-200 hover:text-white bg-slate-850/60 backdrop-blur-md hover:bg-slate-800 rounded-md border border-slate-700/80 hover:border-slate-600 transition inline-flex items-center gap-1.5 shadow duration-150 active:scale-95"
               title="Cerrar Sesión"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -495,7 +495,7 @@ export default function StudentWorkspace({
               <button
                 id="btn-reporte-alumno-pdf"
                 onClick={generatePersonalPDFReport}
-                className="w-full flex items-center justify-center gap-2 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-semibold transition active:scale-95 shadow"
+                className="w-full flex items-center justify-center gap-2 px-3.5 py-1.5 bg-vino-claro/85 backdrop-blur-md hover:bg-vino-claro-hover text-white rounded-md text-xs font-semibold transition duration-150 active:scale-95 shadow border border-vino-claro/10"
               >
                 <FileText className="w-3.5 h-3.5" />
                 Generar Reporte de Horas (PDF)

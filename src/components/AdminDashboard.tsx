@@ -65,6 +65,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
 
   // --- NEW ADMINISTRATOR FORM STATE ---
   const [showAddAdmin, setShowAddAdmin] = useState(false);
+  const [showAdminsListModal, setShowAdminsListModal] = useState(false);
   const [newAdminName, setNewAdminName] = useState("");
   const [newAdminExpediente, setNewAdminExpediente] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
@@ -686,7 +687,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
               id="btn-generate-reporte-pdf-admin"
               onClick={generateMonthlyPDFReport}
               disabled={actionLoading}
-              className="px-3.5 py-1.5 bg-vino-oscuro hover:bg-vino-claro-hover text-white rounded-md text-xs font-medium transition duration-150 active:scale-95 disabled:opacity-50 inline-flex items-center gap-1.5 shadow border border-white/10"
+              className="px-3.5 py-1.5 bg-vino-oscuro/85 backdrop-blur-md hover:bg-vino-claro-hover/95 text-white rounded-md text-xs font-semibold transition duration-150 active:scale-95 disabled:opacity-50 inline-flex items-center gap-1.5 shadow border border-white/20"
             >
               <FileText className="w-3.5 h-3.5" />
               {actionLoading ? "Procesando..." : "Consolidar PDF Mensual"}
@@ -695,7 +696,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
             <button
               id="admin-logout-top"
               onClick={onLogout}
-              className="px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10 rounded-md border border-white/20 transition"
+              className="px-3 py-1.5 text-xs font-semibold text-white bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-md border border-white/20 transition active:scale-95 shadow-sm"
             >
               Cerrar Sesión
             </button>
@@ -718,17 +719,101 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
             </p>
           </div>
           
-          <div>
+          <div className="flex flex-col sm:items-end gap-2 text-right shrink-0">
             <button
               id="btn-trigger-add-admin-modal"
-              onClick={() => setShowAddAdmin(!showAddAdmin)}
-              className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-semibold shadow-sm transition inline-flex items-center gap-1.5 border border-slate-200 active:scale-95"
+              onClick={() => {
+                setShowAddAdmin(!showAddAdmin);
+                setShowAdminsListModal(false);
+              }}
+              className="w-full sm:w-auto px-3.5 py-1.5 bg-slate-100/80 backdrop-blur-md hover:bg-slate-200/95 text-slate-700 rounded-md text-xs font-semibold shadow-sm transition inline-flex items-center justify-center gap-1.5 border border-slate-250 active:scale-95"
             >
               <Key className="w-3.5 h-3.5 text-slate-500" />
               {showAddAdmin ? "Ocultar Registro Admin" : "Registrar Nuevo Administrador"}
             </button>
+
+            <button
+              id="btn-trigger-view-admins"
+              onClick={() => {
+                setShowAdminsListModal(!showAdminsListModal);
+                setShowAddAdmin(false);
+              }}
+              className="w-full sm:w-auto px-3.5 py-1.5 bg-slate-100/60 backdrop-blur-md hover:bg-slate-150/85 text-slate-600 rounded-md text-xs font-semibold shadow-xs transition inline-flex items-center justify-center gap-1.5 border border-slate-200 active:scale-95"
+            >
+              <Users className="w-3.5 h-3.5 text-slate-500" />
+              {showAdminsListModal ? "Ocultar Administradores" : "Ver Administradores Secundarios"}
+            </button>
           </div>
         </div>
+
+        {/* Modal/Form inline to add new admin */}
+        {showAdminsListModal && (
+          <div
+            id="panel-secondary-admins"
+            className="p-5 bg-white rounded-xl border border-slate-200 shadow-md space-y-4 animate-fade-in"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-vino-claro" />
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider font-sans">
+                  Administradores del Sistema (Coordinación y Apoyos)
+                </h4>
+              </div>
+              <span className="text-[10px] text-slate-400 font-mono">Total: {adminsList.length}</span>
+            </div>
+
+            {adminsList.length === 0 ? (
+              <p className="text-xs text-slate-400 italic text-center py-4 font-sans">No hay administradores registrados.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-600">
+                  <thead className="bg-slate-50/75 text-[10px] uppercase font-semibold text-slate-500 font-sans border-b border-slate-100">
+                    <tr>
+                      <th className="p-2.5">Nombre</th>
+                      <th className="p-2.5">Expediente</th>
+                      <th className="p-2.5 text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {adminsList.map((adm) => (
+                      <tr key={adm.id} className="hover:bg-slate-50/50 transition">
+                        <td className="p-2.5 font-medium text-slate-800 font-sans">👤 {adm.name}</td>
+                        <td className="p-2.5 font-mono text-slate-500">{adm.expediente}</td>
+                        <td className="p-2.5 text-center">
+                          {adm.id === "admin-default" ? (
+                            <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded font-bold font-sans">Principal</span>
+                          ) : (
+                            <button
+                              type="button"
+                              id={`btn-delete-admin-${adm.id}`}
+                              onClick={async () => {
+                                if (confirm(`¿Está seguro de eliminar al administrador ${adm.name}?`)) {
+                                  try {
+                                    const resp = await fetch(`/api/auth/admins/${adm.id}`, { method: "DELETE" });
+                                    if (!resp.ok) {
+                                      throw new Error("No se pudo eliminar al administrador.");
+                                    }
+                                    alert("Administrador secundario eliminado correctamente.");
+                                    loadDashboardData();
+                                  } catch (err: any) {
+                                    alert(err.message);
+                                  }
+                                }
+                              }}
+                              className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded text-[10px] font-bold duration-150 transition active:scale-95"
+                            >
+                              Eliminar
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Modal/Form inline to add new admin */}
         {showAddAdmin && (
@@ -833,7 +918,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
             type="button"
             id="tile-alumnos-asignados"
             onClick={scrollToAlumnosSection}
-            className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow hover:border-slate-350 hover:bg-slate-50/50 transition-all text-left focus:outline-none active:scale-98"
+            className="bg-white/80 backdrop-blur-md p-4 rounded-xl border border-slate-200/80 shadow-sm hover:shadow hover:border-slate-350 hover:bg-white/90 transition-all text-left focus:outline-none active:scale-98"
           >
             <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider font-sans block">ALUMNOS ASIGNADOS</span>
             <div className="flex items-center justify-between mt-1">
