@@ -4,6 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import pg from "pg";
 
 dotenv.config();
 
@@ -17,6 +18,39 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 const DB_FILE = process.env.VERCEL 
   ? "/tmp/db.json" 
   : path.join(process.cwd(), "db.json");
+
+// PostgreSQL Setup for Neon
+const PostgreSQLPool = pg.Pool;
+const DB_URL = process.env.DATABASE_URL || "postgresql://neondb_owner:npg_kVTNW5Ge3hCH@ep-broad-bar-atk7zcar-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require";
+
+const pool = new PostgreSQLPool({
+  connectionString: DB_URL,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+
+let cachedDb: any = null;
+let clientInitialized = false;
+
+// Middleware to block requests until database is pre-loaded from cloud
+app.use(async (req, res, next) => {
+  // Pass health check instantly to avoid startup failure
+  if (req.path === "/api/health") {
+    return next();
+  }
+  if (!clientInitialized) {
+    try {
+      await initPostgres();
+    } catch (err) {
+      console.error("Delayed postgres init failed, fallback is on", err);
+    }
+  }
+  next();
+});
 
 // Lazy Gemini API Client
 let aiClient: GoogleGenAI | null = null;
@@ -136,8 +170,60 @@ const DEFAULT_DB = {
   ]
 };
 
-// Help helper for reading/writing low-dependency state
+// Helper to initialize and load database state from Postgres with high speed and full safety
+async function initPostgres() {
+  if (clientInitialized) return;
+  try {
+    // 1. Create table if not exists with a schema storing structured json document
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ueslab_db (
+        key VARCHAR(50) PRIMARY KEY,
+        data JSONB
+      )
+    `);
+
+    // 2. Load the data
+    const res = await pool.query("SELECT data FROM ueslab_db WHERE key = 'main'");
+    if (res.rows.length > 0) {
+      cachedDb = res.rows[0].data;
+      console.log("💚 Successfully loaded and synchronized database state from Neon PostgreSQL.");
+    } else {
+      // Seed the cloud database
+      let initialData = DEFAULT_DB;
+      const localDbPath = path.join(process.cwd(), "db.json");
+      if (fs.existsSync(localDbPath)) {
+        try {
+          initialData = JSON.parse(fs.readFileSync(localDbPath, "utf8"));
+        } catch (e) {
+          console.error("Failed to parse local db.json for seed", e);
+        }
+      }
+      
+      // Auto-populate default admin if missing
+      if (!initialData.admins) {
+        initialData.admins = [
+          { id: "admin-default", name: "Coordinador de Laboratorios", expediente: "admin", password: "admin" }
+        ];
+      }
+
+      await pool.query("INSERT INTO ueslab_db (key, data) VALUES ('main', $1) ON CONFLICT (key) DO NOTHING", [JSON.stringify(initialData)]);
+      cachedDb = initialData;
+      console.log("🌱 Seeded initial database state to Neon PostgreSQL.");
+    }
+    clientInitialized = true;
+  } catch (err) {
+    console.error("⚠️ Failed to load database from Postgres. Falling back to local flat-file.", err);
+    // Let readDb() handle local loading if database connection fails
+  }
+}
+
+// Quick helper for reading database synchronously via in-memory cache with fallback
 function readDb() {
+  if (cachedDb) {
+    return cachedDb;
+  }
+
+  // Fallback local filesystem access (for offline development or fallback mode)
   try {
     if (!fs.existsSync(DB_FILE)) {
       let initialData = DEFAULT_DB;
@@ -149,7 +235,13 @@ function readDb() {
           console.error("Failed to parse local db.json", e);
         }
       }
+      if (!initialData.admins) {
+        initialData.admins = [
+          { id: "admin-default", name: "Coordinador de Laboratorios", expediente: "admin", password: "admin" }
+        ];
+      }
       fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2), "utf8");
+      cachedDb = initialData;
       return initialData;
     }
     const data = fs.readFileSync(DB_FILE, "utf8");
@@ -160,23 +252,36 @@ function readDb() {
       ];
       fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf8");
     }
+    cachedDb = db;
     return db;
   } catch (err) {
-    console.error("Error reading database file", err);
+    console.error("Error reading database file fallback", err);
     return DEFAULT_DB;
   }
 }
 
 function writeDb(data: typeof DEFAULT_DB) {
+  cachedDb = data;
+  
+  // 1. Write to local file as backup
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf8");
   } catch (err) {
-    console.error("Error writing database file", err);
+    console.error("Error writing fallback local database file", err);
   }
+
+  // 2. Synchronize to Neon PostgreSQL database asynchronously (non-blocking)
+  pool.query("INSERT INTO ueslab_db (key, data) VALUES ('main', $1) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data", [JSON.stringify(data)])
+    .then(() => {
+      console.log("💾 Database successfully saved & synchronized to PostgreSQL.");
+    })
+    .catch(err => {
+      console.error("⚠️ Failed to synchronize database state to PostgreSQL.", err);
+    });
 }
 
-// Ensure database file is generated on start
-readDb();
+// Initialize Postgres trigger immediately on load
+initPostgres().catch(err => console.error("Immediate Postgres connect failed:", err));
 
 /* 
 =============================================
@@ -610,10 +715,18 @@ app.delete("/api/pcs/:id", (req, res) => {
   res.json({ success: true });
 });
 
-// Endpoint to Register and obtain admins list
+// Endpoint to Register and obtain admins list (securely sanitizing sensitive credentials)
 app.get("/api/auth/admins", (req, res) => {
   const db = readDb();
-  res.json(db.admins || []);
+  const rawList = db.admins || [];
+  const sanitizedList = rawList.map((adm: any) => ({
+    id: adm.id,
+    name: adm.name,
+    // Hide default coordinator (main admin) username to avoid security leak
+    expediente: adm.id === "admin-default" ? "Coordinación Principal" : adm.expediente
+    // Completely omit password field!
+  }));
+  res.json(sanitizedList);
 });
 
 app.delete("/api/auth/admins/:id", (req, res) => {
