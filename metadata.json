@@ -1,0 +1,6 @@
+{
+  "name": "UesLab",
+  "description": "Sistema de gestión de mantenimiento preventivo y correctivo de laboratorios de computación escolares por alumnos de servicio social.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
