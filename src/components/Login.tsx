@@ -157,13 +157,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
           </form>
 
-          {/* Quick Admin instructions note */}
-          <div className="mt-6 pt-4 border-t border-slate-100 flex items-start gap-2 text-[10px] text-slate-400 leading-relaxed font-sans">
-            <span className="text-yellow-600 text-xs shrink-0">💡</span>
-            <p>
-              <strong>Acceso de Prueba Coordinador:</strong> Use <code className="bg-slate-100 text-slate-800 font-mono px-1 rounded font-bold">admin</code> tanto de ID como contraseña.
-            </p>
-          </div>
+
         </div>
       </div>
     </div>
