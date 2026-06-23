@@ -92,6 +92,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
 
   // Loading indicator for PDF or submit operations
   const [actionLoading, setActionLoading] = useState(false);
+  const [pcDraftAssignments, setPcDraftAssignments] = useState<Record<string, string>>({});
 
   // Fetch all db resources
   const loadDashboardData = () => {
@@ -468,6 +469,11 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
         return res.json();
       })
       .then(() => {
+        setPcDraftAssignments(prev => {
+          const updated = { ...prev };
+          delete updated[pcId];
+          return updated;
+        });
         loadDashboardData();
       })
       .catch(err => alert(err.message));
@@ -2041,17 +2047,39 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                     {/* REASSIGNATION SELECTOR PANEL */}
                     <div className="mt-2 pt-2 border-t border-slate-100">
                       <label className="block text-[9px] font-bold text-slate-500 uppercase mb-0.5">Encargado Directo:</label>
-                      <select
-                        id={`select-reassign-pc-${pc.id}`}
-                        value={pc.assignedAlumnoId || ""}
-                        onChange={(e) => handleReassignPC(pc.id, e.target.value)}
-                        className="w-full text-[11px] p-1 border border-slate-250 bg-slate-50 rounded hover:bg-white focus:outline-none"
-                      >
-                        <option value="">-- Sin asignar --</option>
-                        {alumnos.map(a => (
-                          <option key={a.id} value={a.id}>{a.name}</option>
-                        ))}
-                      </select>
+                      {(() => {
+                        const draftValue = pcDraftAssignments[pc.id] !== undefined ? pcDraftAssignments[pc.id] : (pc.assignedAlumnoId || "");
+                        const hasChanged = draftValue !== (pc.assignedAlumnoId || "");
+                        return (
+                          <>
+                            <select
+                              id={`select-reassign-pc-${pc.id}`}
+                              value={draftValue}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setPcDraftAssignments(prev => ({ ...prev, [pc.id]: val }));
+                              }}
+                              className={`w-full text-[11px] p-1 border rounded bg-slate-50 focus:outline-none transition ${
+                                hasChanged ? "border-amber-400 bg-amber-50" : "border-slate-200"
+                              }`}
+                            >
+                              <option value="">-- Sin asignar --</option>
+                              {alumnos.map(a => (
+                                <option key={a.id} value={a.id}>{a.name}</option>
+                              ))}
+                            </select>
+                            {hasChanged && (
+                              <button
+                                id={`btn-confirm-assign-${pc.id}`}
+                                onClick={() => handleReassignPC(pc.id, draftValue)}
+                                className="mt-1.5 w-full py-1 text-[10px] font-bold text-center text-white bg-amber-500 hover:bg-amber-600 rounded transition flex items-center justify-center gap-1 shadow-sm"
+                              >
+                                <span>Confirmar Asignación 💾</span>
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
 
                     {/* Timeline logs modal quick trigger */}

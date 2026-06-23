@@ -230,8 +230,20 @@ async function initPostgres() {
   }
 }
 
-// Quick helper for reading database synchronously via in-memory cache with fallback
-function readDb() {
+// Quick helper for reading database from cloud dynamically
+async function readDb() {
+  if (clientInitialized) {
+    try {
+      const res = await pool.query("SELECT data FROM ueslab_db WHERE key = 'main'");
+      if (res.rows.length > 0) {
+        cachedDb = res.rows[0].data;
+        return cachedDb;
+      }
+    } catch (err) {
+      console.error("⚠️ Error reading from Neon PostgreSQL in readDb:", err);
+    }
+  }
+
   if (cachedDb) {
     return cachedDb;
   }
@@ -302,7 +314,7 @@ initPostgres().catch(err => console.error("Immediate Postgres connect failed:", 
 */
 
 // Auth Endpoint
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   const { username, password } = req.body;
   
   if (!username || !password) {
@@ -310,7 +322,7 @@ app.post("/api/auth/login", (req, res) => {
   }
 
   // Check Admin
-  const db = readDb();
+  const db = await readDb();
   
   // Custom admins list check
   const customAdmin = db.admins?.find(
@@ -390,16 +402,16 @@ app.get("/api/db-status", async (req, res) => {
 });
 
 // Retrieve completed repairs count for a specific student easily
-app.get("/api/alumnos/:id/repairs-count", (req, res) => {
+app.get("/api/alumnos/:id/repairs-count", async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
+  const db = await readDb();
   const studentLogs = (db.logs || []).filter((l: any) => l.studentId === id && l.type === "Reparado");
   res.json({ count: studentLogs.length });
 });
 
 // Rooms Endpoints
-app.get("/api/rooms", (req, res) => {
-  const db = readDb();
+app.get("/api/rooms", async (req, res) => {
+  const db = await readDb();
   res.json(db.rooms);
 });
 
@@ -409,7 +421,7 @@ app.post("/api/rooms", async (req, res) => {
     return res.status(400).json({ error: "Nombre y cantidad de computadoras inválidas." });
   }
 
-  const db = readDb();
+  const db = await readDb();
   const newRoomId = `room-${Date.now()}`;
   const newRoom = { id: newRoomId, name, pcsCount: Number(pcsCount) };
   
@@ -433,8 +445,8 @@ app.post("/api/rooms", async (req, res) => {
 });
 
 // PCs Endpoints
-app.get("/api/pcs", (req, res) => {
-  const db = readDb();
+app.get("/api/pcs", async (req, res) => {
+  const db = await readDb();
   res.json(db.pcs);
 });
 
@@ -443,7 +455,7 @@ app.put("/api/pcs/:id/assign", async (req, res) => {
   const { id } = req.params;
   const { assignedAlumnoId } = req.body; // Can be string or null
 
-  const db = readDb();
+  const db = await readDb();
   const pc = db.pcs.find((p) => p.id === id);
   if (!pc) {
     return res.status(404).json({ error: "Computadora no encontrada" });
@@ -457,16 +469,16 @@ app.put("/api/pcs/:id/assign", async (req, res) => {
 });
 
 // Get Clinical history logs of a certain PC
-app.get("/api/pcs/:id/history", (req, res) => {
+app.get("/api/pcs/:id/history", async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
+  const db = await readDb();
   const pcLogs = db.logs.filter((l) => l.pcId === id);
   res.json(pcLogs);
 });
 
 // Groups Endpoints (CRITICAL MODULE: register students & credentials)
-app.get("/api/groups", (req, res) => {
-  const db = readDb();
+app.get("/api/groups", async (req, res) => {
+  const db = await readDb();
   res.json(db.groups);
 });
 
@@ -477,7 +489,7 @@ app.post("/api/groups", async (req, res) => {
     return res.status(400).json({ error: "Debe rellenar el nombre del grupo y asignar un salón." });
   }
 
-  const db = readDb();
+  const db = await readDb();
   const groupId = `group-${Date.now()}`;
   const folio = `FOL-SS${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -536,8 +548,8 @@ app.post("/api/groups", async (req, res) => {
 });
 
 // Alumnos Endpoints
-app.get("/api/alumnos", (req, res) => {
-  const db = readDb();
+app.get("/api/alumnos", async (req, res) => {
+  const db = await readDb();
   res.json(db.alumnos);
 });
 
@@ -548,7 +560,7 @@ app.post("/api/alumnos", async (req, res) => {
     return res.status(400).json({ error: "Nombre, expediente y contraseña son obligatorios de registrar." });
   }
 
-  const db = readDb();
+  const db = await readDb();
   const exists = db.alumnos.some(a => String(a.expediente).trim().toLowerCase() === String(expediente).trim().toLowerCase());
   if (exists) {
     return res.status(400).json({ error: `El expediente "${expediente}" ya se encuentra registrado.` });
@@ -577,7 +589,7 @@ app.put("/api/alumnos/:id", async (req, res) => {
   const { id } = req.params;
   const { name, career, semester, expediente, password, startDate, endDate } = req.body;
 
-  const db = readDb();
+  const db = await readDb();
   const student = db.alumnos.find((a) => a.id === id);
   if (!student) {
     return res.status(404).json({ error: "Alumno no encontrado" });
@@ -598,7 +610,7 @@ app.put("/api/alumnos/:id", async (req, res) => {
 // Delete student registration
 app.delete("/api/alumnos/:id", async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
+  const db = await readDb();
   db.alumnos = db.alumnos.filter((a) => a.id !== id);
   
   // Clean PC assignments of this student
@@ -631,7 +643,7 @@ app.post("/api/maintenance/submit", async (req, res) => {
     return res.status(400).json({ error: "Faltan datos obligatorios para registrar el reporte de mantenimiento." });
   }
 
-  const db = readDb();
+  const db = await readDb();
   const pc = db.pcs.find((p) => p.id === pcId);
   if (!pc) {
     return res.status(404).json({ error: "Computadora no encontrada" });
@@ -679,14 +691,14 @@ app.post("/api/maintenance/submit", async (req, res) => {
 });
 
 // GET all maintenance logs for history & progress analysis
-app.get("/api/logs", (req, res) => {
-  const db = readDb();
+app.get("/api/logs", async (req, res) => {
+  const db = await readDb();
   res.json(db.logs || []);
 });
 
 // Spare Parts inventory api
-app.get("/api/inventory", (req, res) => {
-  const db = readDb();
+app.get("/api/inventory", async (req, res) => {
+  const db = await readDb();
   res.json(db.inventory);
 });
 
@@ -696,7 +708,7 @@ app.post("/api/inventory", async (req, res) => {
     return res.status(400).json({ error: "Debe proveer nombre y stock válido." });
   }
 
-  const db = readDb();
+  const db = await readDb();
   const newPart = {
     id: `part-${Date.now()}`,
     name: name,
@@ -713,7 +725,7 @@ app.put("/api/inventory/:id", async (req, res) => {
   const { id } = req.params;
   const { stock, minStock, name } = req.body;
 
-  const db = readDb();
+  const db = await readDb();
   const part = db.inventory.find((i) => i.id === id);
   if (!part) {
     return res.status(404).json({ error: "Pieza de inventario no encontrada." });
@@ -730,7 +742,7 @@ app.put("/api/inventory/:id", async (req, res) => {
 // Delete spare part from inventory
 app.delete("/api/inventory/:id", async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
+  const db = await readDb();
   db.inventory = db.inventory.filter((item) => item.id !== id);
   await writeDb(db);
   res.json({ success: true });
@@ -739,7 +751,7 @@ app.delete("/api/inventory/:id", async (req, res) => {
 // Delete room/laboratory and all its PCs
 app.delete("/api/rooms/:id", async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
+  const db = await readDb();
   db.rooms = db.rooms.filter((r) => r.id !== id);
   db.pcs = db.pcs.filter((pc) => pc.roomId !== id);
   await writeDb(db);
@@ -749,7 +761,7 @@ app.delete("/api/rooms/:id", async (req, res) => {
 // Delete digital group / folio and clean assigned alumnos
 app.delete("/api/groups/:id", async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
+  const db = await readDb();
   db.groups = db.groups.filter((g) => g.id !== id);
   db.alumnos.forEach((alumno) => {
     if (alumno.groupId === id) {
@@ -763,21 +775,21 @@ app.delete("/api/groups/:id", async (req, res) => {
 // Delete computer entirely
 app.delete("/api/pcs/:id", async (req, res) => {
   const { id } = req.params;
-  const db = readDb();
+  const db = await readDb();
   db.pcs = db.pcs.filter((pc) => pc.id !== id);
   await writeDb(db);
   res.json({ success: true });
 });
 
 // Endpoint to Register and obtain admins list (securely sanitizing sensitive credentials)
-app.get("/api/auth/admins", (req, res) => {
+app.get("/api/auth/admins", async (req, res) => {
   const adminExpediente = String(req.query.adminExpediente || "");
   if (adminExpediente !== "admin") {
     // Secondary admins or other users cannot view our admin list
     return res.json([]);
   }
 
-  const db = readDb();
+  const db = await readDb();
   const rawList = db.admins || [];
   const sanitizedList = rawList.map((adm: any) => ({
     id: adm.id,
@@ -800,7 +812,7 @@ app.delete("/api/auth/admins/:id", async (req, res) => {
     return res.status(400).json({ error: "No se puede eliminar el administrador principal por motivos de seguridad escolar." });
   }
 
-  const db = readDb();
+  const db = await readDb();
   if (!db.admins) db.admins = [];
   const idx = db.admins.findIndex(adm => adm.id === id);
   if (idx === -1) {
@@ -823,7 +835,7 @@ app.post("/api/auth/register-admin", async (req, res) => {
     return res.status(400).json({ error: "Nombre, expediente y contraseña son obligatorios de registrar para un Administrador." });
   }
 
-  const db = readDb();
+  const db = await readDb();
   if (!db.admins) {
     db.admins = [];
   }
