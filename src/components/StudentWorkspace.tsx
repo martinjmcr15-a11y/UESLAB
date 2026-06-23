@@ -63,9 +63,10 @@ export default function StudentWorkspace({
     setLoading(true);
     
     // Parallel fetch PCs and Spare Parts Catalog
+    const cb = `?_t=${Date.now()}`;
     Promise.all([
-      fetch("/api/pcs").then(res => res.json()),
-      fetch("/api/inventory").then(res => res.json())
+      fetch("/api/pcs" + cb).then(res => res.json()),
+      fetch("/api/inventory" + cb).then(res => res.json())
     ])
       .then(([allPcs, parts]) => {
         // Filter PCs that correspond only to the assigned salon

@@ -15,6 +15,15 @@ const PORT = 3000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+// Prevent caching for all API responses to ensure real-time data persistence in Serverless deployments
+app.use("/api", (req, res, next) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  res.set("Surrogate-Control", "no-store");
+  next();
+});
+
 const DB_FILE = process.env.VERCEL 
   ? "/tmp/db.json" 
   : path.join(process.cwd(), "db.json");
@@ -25,12 +34,16 @@ const DB_URL = process.env.DATABASE_URL || "postgresql://neondb_owner:npg_kVTNW5
 
 const pool = new PostgreSQLPool({
   connectionString: DB_URL,
-  max: 10,
-  idleTimeoutMillis: 30000,
+  max: 3,                 // Reducido para evitar el agotamiento de conexiones en entornos Serverless
+  idleTimeoutMillis: 1000, // Liberar conexiones inactivas de inmediato para evitar bloqueos por expiración de sockets
   connectionTimeoutMillis: 5000,
   ssl: {
     rejectUnauthorized: false
   }
+});
+
+pool.on("error", (err) => {
+  console.error("⚠️ Error imprevisto en cliente inactivo de Neon:", err);
 });
 
 let cachedDb: any = null;
@@ -260,7 +273,7 @@ function readDb() {
   }
 }
 
-function writeDb(data: typeof DEFAULT_DB) {
+async function writeDb(data: typeof DEFAULT_DB) {
   cachedDb = data;
   
   // 1. Write to local file as backup
@@ -270,14 +283,13 @@ function writeDb(data: typeof DEFAULT_DB) {
     console.error("Error writing fallback local database file", err);
   }
 
-  // 2. Synchronize to Neon PostgreSQL database asynchronously (non-blocking)
-  pool.query("INSERT INTO ueslab_db (key, data) VALUES ('main', $1) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data", [JSON.stringify(data)])
-    .then(() => {
-      console.log("💾 Database successfully saved & synchronized to PostgreSQL.");
-    })
-    .catch(err => {
-      console.error("⚠️ Failed to synchronize database state to PostgreSQL.", err);
-    });
+  // 2. Synchronize to Neon PostgreSQL database and await completion (critical for Serverless)
+  try {
+    await pool.query("INSERT INTO ueslab_db (key, data) VALUES ('main', $1) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data", [JSON.stringify(data)]);
+    console.log("💾 Database successfully saved & synchronized to PostgreSQL.");
+  } catch (err) {
+    console.error("⚠️ Failed to synchronize database state to PostgreSQL.", err);
+  }
 }
 
 // Initialize Postgres trigger immediately on load
@@ -391,7 +403,7 @@ app.get("/api/rooms", (req, res) => {
   res.json(db.rooms);
 });
 
-app.post("/api/rooms", (req, res) => {
+app.post("/api/rooms", async (req, res) => {
   const { name, pcsCount } = req.body;
   if (!name || isNaN(pcsCount)) {
     return res.status(400).json({ error: "Nombre y cantidad de computadoras inválidas." });
@@ -416,7 +428,7 @@ app.post("/api/rooms", (req, res) => {
     });
   }
 
-  writeDb(db);
+  await writeDb(db);
   res.status(201).json({ room: newRoom, pcsCount });
 });
 
@@ -427,7 +439,7 @@ app.get("/api/pcs", (req, res) => {
 });
 
 // Assign a Specific PC to a specific student
-app.put("/api/pcs/:id/assign", (req, res) => {
+app.put("/api/pcs/:id/assign", async (req, res) => {
   const { id } = req.params;
   const { assignedAlumnoId } = req.body; // Can be string or null
 
@@ -440,7 +452,7 @@ app.put("/api/pcs/:id/assign", (req, res) => {
   pc.assignedAlumnoId = assignedAlumnoId || null;
   pc.lastUpdate = new Date().toISOString().split("T")[0];
 
-  writeDb(db);
+  await writeDb(db);
   res.json(pc);
 });
 
@@ -458,7 +470,7 @@ app.get("/api/groups", (req, res) => {
   res.json(db.groups);
 });
 
-app.post("/api/groups", (req, res) => {
+app.post("/api/groups", async (req, res) => {
   const { name, salonId, alumnos, alumnoIds } = req.body;
   
   if (!name || !salonId) {
@@ -519,7 +531,7 @@ app.post("/api/groups", (req, res) => {
     }
   });
 
-  writeDb(db);
+  await writeDb(db);
   res.status(201).json({ group: newGroup, alumnos: targetAlumnos });
 });
 
@@ -530,7 +542,7 @@ app.get("/api/alumnos", (req, res) => {
 });
 
 // Register individual student
-app.post("/api/alumnos", (req, res) => {
+app.post("/api/alumnos", async (req, res) => {
   const { name, career, semester, expediente, password, groupId, startDate, endDate } = req.body;
   if (!name || !expediente || !password) {
     return res.status(400).json({ error: "Nombre, expediente y contraseña son obligatorios de registrar." });
@@ -556,12 +568,12 @@ app.post("/api/alumnos", (req, res) => {
   };
 
   db.alumnos.push(newStudent);
-  writeDb(db);
+  await writeDb(db);
   res.status(201).json(newStudent);
 });
 
 // Reset or change student credentials
-app.put("/api/alumnos/:id", (req, res) => {
+app.put("/api/alumnos/:id", async (req, res) => {
   const { id } = req.params;
   const { name, career, semester, expediente, password, startDate, endDate } = req.body;
 
@@ -579,12 +591,12 @@ app.put("/api/alumnos/:id", (req, res) => {
   if (startDate !== undefined) student.startDate = startDate;
   if (endDate !== undefined) student.endDate = endDate;
 
-  writeDb(db);
+  await writeDb(db);
   res.json(student);
 });
 
 // Delete student registration
-app.delete("/api/alumnos/:id", (req, res) => {
+app.delete("/api/alumnos/:id", async (req, res) => {
   const { id } = req.params;
   const db = readDb();
   db.alumnos = db.alumnos.filter((a) => a.id !== id);
@@ -596,12 +608,12 @@ app.delete("/api/alumnos/:id", (req, res) => {
     }
   });
 
-  writeDb(db);
+  await writeDb(db);
   res.json({ success: true });
 });
 
 // Maintenance workflows (En mantenimiento, Reparado, Irreparable)
-app.post("/api/maintenance/submit", (req, res) => {
+app.post("/api/maintenance/submit", async (req, res) => {
   const {
     pcId,
     state,
@@ -661,7 +673,7 @@ app.post("/api/maintenance/submit", (req, res) => {
   };
 
   db.logs.push(newLog);
-  writeDb(db);
+  await writeDb(db);
 
   res.json({ success: true, pc, log: newLog });
 });
@@ -678,7 +690,7 @@ app.get("/api/inventory", (req, res) => {
   res.json(db.inventory);
 });
 
-app.post("/api/inventory", (req, res) => {
+app.post("/api/inventory", async (req, res) => {
   const { name, stock, minStock } = req.body;
   if (!name || isNaN(stock)) {
     return res.status(400).json({ error: "Debe proveer nombre y stock válido." });
@@ -693,11 +705,11 @@ app.post("/api/inventory", (req, res) => {
   };
 
   db.inventory.push(newPart);
-  writeDb(db);
+  await writeDb(db);
   res.status(201).json(newPart);
 });
 
-app.put("/api/inventory/:id", (req, res) => {
+app.put("/api/inventory/:id", async (req, res) => {
   const { id } = req.params;
   const { stock, minStock, name } = req.body;
 
@@ -711,31 +723,31 @@ app.put("/api/inventory/:id", (req, res) => {
   if (minStock !== undefined) part.minStock = parseInt(minStock, 10);
   if (name !== undefined) part.name = name;
 
-  writeDb(db);
+  await writeDb(db);
   res.json(part);
 });
 
 // Delete spare part from inventory
-app.delete("/api/inventory/:id", (req, res) => {
+app.delete("/api/inventory/:id", async (req, res) => {
   const { id } = req.params;
   const db = readDb();
   db.inventory = db.inventory.filter((item) => item.id !== id);
-  writeDb(db);
+  await writeDb(db);
   res.json({ success: true });
 });
 
 // Delete room/laboratory and all its PCs
-app.delete("/api/rooms/:id", (req, res) => {
+app.delete("/api/rooms/:id", async (req, res) => {
   const { id } = req.params;
   const db = readDb();
   db.rooms = db.rooms.filter((r) => r.id !== id);
   db.pcs = db.pcs.filter((pc) => pc.roomId !== id);
-  writeDb(db);
+  await writeDb(db);
   res.json({ success: true });
 });
 
 // Delete digital group / folio and clean assigned alumnos
-app.delete("/api/groups/:id", (req, res) => {
+app.delete("/api/groups/:id", async (req, res) => {
   const { id } = req.params;
   const db = readDb();
   db.groups = db.groups.filter((g) => g.id !== id);
@@ -744,16 +756,16 @@ app.delete("/api/groups/:id", (req, res) => {
       alumno.groupId = null;
     }
   });
-  writeDb(db);
+  await writeDb(db);
   res.json({ success: true });
 });
 
 // Delete computer entirely
-app.delete("/api/pcs/:id", (req, res) => {
+app.delete("/api/pcs/:id", async (req, res) => {
   const { id } = req.params;
   const db = readDb();
   db.pcs = db.pcs.filter((pc) => pc.id !== id);
-  writeDb(db);
+  await writeDb(db);
   res.json({ success: true });
 });
 
@@ -777,7 +789,7 @@ app.get("/api/auth/admins", (req, res) => {
   res.json(sanitizedList);
 });
 
-app.delete("/api/auth/admins/:id", (req, res) => {
+app.delete("/api/auth/admins/:id", async (req, res) => {
   const adminExpediente = String(req.query.adminExpediente || "");
   if (adminExpediente !== "admin") {
     return res.status(403).json({ error: "No autorizado. Solo el administrador principal puede eliminar administradores." });
@@ -796,11 +808,11 @@ app.delete("/api/auth/admins/:id", (req, res) => {
   }
 
   db.admins.splice(idx, 1);
-  writeDb(db);
+  await writeDb(db);
   res.json({ success: true });
 });
 
-app.post("/api/auth/register-admin", (req, res) => {
+app.post("/api/auth/register-admin", async (req, res) => {
   const adminExpediente = String(req.query.adminExpediente || "");
   if (adminExpediente !== "admin") {
     return res.status(403).json({ error: "No autorizado. Solo el administrador principal puede registrar nuevos administradores." });
@@ -829,7 +841,7 @@ app.post("/api/auth/register-admin", (req, res) => {
   };
 
   db.admins.push(newAdmin);
-  writeDb(db);
+  await writeDb(db);
   res.status(201).json(newAdmin);
 });
 

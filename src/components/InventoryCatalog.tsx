@@ -28,7 +28,7 @@ export default function InventoryCatalog({
 
   const loadInventory = () => {
     setLoading(true);
-    fetch("/api/inventory")
+    fetch("/api/inventory?_t=" + Date.now())
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load inventory");
         return res.json();

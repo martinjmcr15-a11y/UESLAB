@@ -96,14 +96,15 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   // Fetch all db resources
   const loadDashboardData = () => {
     setLoading(true);
+    const cb = `?_t=${Date.now()}`;
     Promise.all([
-      fetch("/api/rooms").then(res => res.json()),
-      fetch("/api/pcs").then(res => res.json()),
-      fetch("/api/groups").then(res => res.json()),
-      fetch("/api/alumnos").then(res => res.json()),
-      fetch("/api/inventory").then(res => res.json()),
-      fetch(`/api/auth/admins?adminExpediente=${adminUser?.expediente || ""}`).then(res => res.json()).catch(() => []),
-      fetch("/api/logs").then(res => res.json()).catch(() => [])
+      fetch("/api/rooms" + cb).then(res => res.json()),
+      fetch("/api/pcs" + cb).then(res => res.json()),
+      fetch("/api/groups" + cb).then(res => res.json()),
+      fetch("/api/alumnos" + cb).then(res => res.json()),
+      fetch("/api/inventory" + cb).then(res => res.json()),
+      fetch(`/api/auth/admins${cb}&adminExpediente=${adminUser?.expediente || ""}`).then(res => res.json()).catch(() => []),
+      fetch("/api/logs" + cb).then(res => res.json()).catch(() => [])
     ])
       .then(([roomsData, pcsData, groupsData, alumnosData, inventoryData, adminsData, logsData]) => {
         setRooms(roomsData);
