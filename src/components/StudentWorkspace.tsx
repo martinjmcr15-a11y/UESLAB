@@ -56,10 +56,6 @@ export default function StudentWorkspace({
 
   // Load Data
   const loadWorkspaceData = () => {
-    if (!room) {
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     
     // Parallel fetch PCs and Spare Parts Catalog
@@ -69,8 +65,12 @@ export default function StudentWorkspace({
       fetch("/api/inventory" + cb).then(res => res.json())
     ])
       .then(([allPcs, parts]) => {
-        // Filter PCs that correspond only to the assigned salon
-        const salonPcs = allPcs.filter((p: PC) => p.roomId === room.id);
+        // Filter PCs that correspond to the assigned salon, OR are directly assigned to this student
+        const salonPcs = allPcs.filter((p: PC) => {
+          const matchesRoom = room ? p.roomId === room.id : false;
+          const matchesIndividual = p.assignedAlumnoId === alumno.id;
+          return matchesRoom || matchesIndividual;
+        });
         setPcs(salonPcs);
         setInventory(parts);
         setLoading(false);
@@ -83,7 +83,7 @@ export default function StudentWorkspace({
 
   useEffect(() => {
     loadWorkspaceData();
-  }, [room]);
+  }, [room, alumno.id]);
 
   // Handle PC Select for maintenance
   const handleSelectPc = (pc: PC) => {
@@ -268,7 +268,7 @@ export default function StudentWorkspace({
       const pcsData = await res.json();
       
       const resLogs = await fetch("/api/alumnos"); // Dummy fetch to satisfy loading but let's query all completed repairs
-      const allPcsInSalon = pcsData.filter((p: PC) => p.roomId === room?.id);
+      const allPcsInSalon = pcsData.filter((p: PC) => (room && p.roomId === room.id) || p.assignedAlumnoId === alumno.id);
       
       // Let's filter logs belonging to this alumno specifically that were repaired
       const logsRes = await fetch("/api/pcs"); // Wait, let's fetch all history records
@@ -553,7 +553,7 @@ export default function StudentWorkspace({
                     Estación de Mantenimiento / Reporte Escolar
                   </h3>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    Laboratorio: <span className="font-semibold">{room?.name}</span> • Equipo: <span className="font-mono font-bold text-blue-700">{selectedPc.tag}</span>
+                    Laboratorio: <span className="font-semibold">{room?.name || selectedPc.roomId || "Asignación Directa"}</span> • Equipo: <span className="font-mono font-bold text-blue-700">{selectedPc.tag}</span>
                   </p>
                 </div>
 
