@@ -3,10 +3,11 @@ import { Room, PC, Group, Alumno, MaintenanceLog, SparePart } from "../types";
 import { 
   Users, Laptop, Layout, FileText, Plus, Search, Calendar, ChevronDown, CheckCircle, 
   AlertTriangle, Hammer, Key, RefreshCw, Layers, Edit, Trash, BarChart, Settings, UserPlus,
-  Eye, EyeOff, Image as ImageIcon, Wrench
+  Eye, EyeOff, Image as ImageIcon, Wrench, Info
 } from "lucide-react";
 import ComputerHistoryModal from "./ComputerHistoryModal";
 import InventoryCatalog from "./InventoryCatalog";
+import NeonStatusIndicator from "./NeonStatusIndicator";
 import { jsPDF } from "jspdf";
 
 interface AdminDashboardProps {
@@ -19,6 +20,8 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardProps) {
+  const isMainAdmin = adminUser?.expediente === "admin";
+
   // Database States
   const [rooms, setRooms] = useState<Room[]>([]);
   const [pcs, setPcs] = useState<PC[]>([]);
@@ -62,6 +65,8 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   const [singleStudentExpediente, setSingleStudentExpediente] = useState("");
   const [singleStudentPassword, setSingleStudentPassword] = useState("");
   const [singleStudentGroupId, setSingleStudentGroupId] = useState("");
+  const [singleStudentStartDate, setSingleStudentStartDate] = useState("");
+  const [singleStudentEndDate, setSingleStudentEndDate] = useState("");
 
   // --- NEW ADMINISTRATOR FORM STATE ---
   const [showAddAdmin, setShowAddAdmin] = useState(false);
@@ -73,6 +78,8 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
 
   // --- STUDENT DETAILED HISTORY ANALYSIS STATE ---
   const [selectedStudentForHistory, setSelectedStudentForHistory] = useState<Alumno | null>(null);
+  const [infoStudent, setInfoStudent] = useState<Alumno | null>(null);
+  const [infoStudentRepairs, setInfoStudentRepairs] = useState<number>(0);
   const [allLogs, setAllLogs] = useState<MaintenanceLog[]>([]);
   const [expandedLogIds, setExpandedLogIds] = useState<string[]>([]);
   const [zoomedPhoto, setZoomedPhoto] = useState<string | null>(null);
@@ -95,7 +102,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
       fetch("/api/groups").then(res => res.json()),
       fetch("/api/alumnos").then(res => res.json()),
       fetch("/api/inventory").then(res => res.json()),
-      fetch("/api/auth/admins").then(res => res.json()).catch(() => []),
+      fetch(`/api/auth/admins?adminExpediente=${adminUser?.expediente || ""}`).then(res => res.json()).catch(() => []),
       fetch("/api/logs").then(res => res.json()).catch(() => [])
     ])
       .then(([roomsData, pcsData, groupsData, alumnosData, inventoryData, adminsData, logsData]) => {
@@ -229,7 +236,9 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
         semester: parseInt(singleStudentSemester, 10) || 1,
         expediente: singleStudentExpediente,
         password: singleStudentPassword,
-        groupId: singleStudentGroupId || null
+        groupId: singleStudentGroupId || null,
+        startDate: singleStudentStartDate || null,
+        endDate: singleStudentEndDate || null
       })
     })
       .then(res => {
@@ -246,6 +255,8 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
         setSingleStudentExpediente("");
         setSingleStudentPassword("");
         setSingleStudentGroupId("");
+        setSingleStudentStartDate("");
+        setSingleStudentEndDate("");
         setShowAddStudentForm(false);
         loadDashboardData();
       })
@@ -666,8 +677,9 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
             </div>
             <div>
               <span className="text-[9px] font-bold text-white/80 block tracking-wider font-mono uppercase">Universidad Estatal de Sonora</span>
-              <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-1">
-                UesLab <span className="text-white/70 font-normal text-xs">v2.0</span>
+              <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
+                UesLab
+                <NeonStatusIndicator />
               </h1>
             </div>
           </div>
@@ -676,7 +688,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
             <button
               id="btn-nav-alumnos-goto"
               onClick={scrollToAlumnosSection}
-              className="px-3.5 py-1.5 bg-vino-oscuro hover:bg-vino-claro-hover text-white rounded-md text-xs font-semibold transition duration-150 active:scale-95 inline-flex items-center gap-1.5 shadow border border-white/10"
+              className="px-3.5 py-1.5 text-xs font-semibold text-white bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-md border border-white/20 transition active:scale-95 shadow-sm inline-flex items-center gap-1.5"
               title="Ir a lista de alumnos de servicio social y analizar progreso"
             >
               <Users className="w-4 h-4 text-white" />
@@ -687,7 +699,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
               id="btn-generate-reporte-pdf-admin"
               onClick={generateMonthlyPDFReport}
               disabled={actionLoading}
-              className="px-3.5 py-1.5 bg-vino-oscuro/85 backdrop-blur-md hover:bg-vino-claro-hover/95 text-white rounded-md text-xs font-semibold transition duration-150 active:scale-95 disabled:opacity-50 inline-flex items-center gap-1.5 shadow border border-white/20"
+              className="px-3.5 py-1.5 text-xs font-semibold text-white bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-md border border-white/20 transition active:scale-95 shadow-sm inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <FileText className="w-3.5 h-3.5" />
               {actionLoading ? "Procesando..." : "Consolidar PDF Mensual"}
@@ -719,31 +731,33 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
             </p>
           </div>
           
-          <div className="flex flex-col sm:items-end gap-2 text-right shrink-0">
-            <button
-              id="btn-trigger-add-admin-modal"
-              onClick={() => {
-                setShowAddAdmin(!showAddAdmin);
-                setShowAdminsListModal(false);
-              }}
-              className="w-full sm:w-auto px-3.5 py-1.5 bg-slate-100/80 backdrop-blur-md hover:bg-slate-200/95 text-slate-700 rounded-md text-xs font-semibold shadow-sm transition inline-flex items-center justify-center gap-1.5 border border-slate-250 active:scale-95"
-            >
-              <Key className="w-3.5 h-3.5 text-slate-500" />
-              {showAddAdmin ? "Ocultar Registro Admin" : "Registrar Nuevo Administrador"}
-            </button>
+          {isMainAdmin && (
+            <div className="flex flex-col sm:items-end gap-2 text-right shrink-0">
+              <button
+                id="btn-trigger-add-admin-modal"
+                onClick={() => {
+                  setShowAddAdmin(!showAddAdmin);
+                  setShowAdminsListModal(false);
+                }}
+                className="w-full sm:w-auto px-3.5 py-1.5 bg-slate-100/80 backdrop-blur-md hover:bg-slate-200/95 text-slate-700 rounded-md text-xs font-semibold shadow-sm transition inline-flex items-center justify-center gap-1.5 border border-slate-250 active:scale-95"
+              >
+                <Key className="w-3.5 h-3.5 text-slate-500" />
+                {showAddAdmin ? "Ocultar Registro Admin" : "Registrar Nuevo Administrador"}
+              </button>
 
-            <button
-              id="btn-trigger-view-admins"
-              onClick={() => {
-                setShowAdminsListModal(!showAdminsListModal);
-                setShowAddAdmin(false);
-              }}
-              className="w-full sm:w-auto px-3.5 py-1.5 bg-slate-100/60 backdrop-blur-md hover:bg-slate-150/85 text-slate-600 rounded-md text-xs font-semibold shadow-xs transition inline-flex items-center justify-center gap-1.5 border border-slate-200 active:scale-95"
-            >
-              <Users className="w-3.5 h-3.5 text-slate-500" />
-              {showAdminsListModal ? "Ocultar Administradores" : "Ver Administradores Secundarios"}
-            </button>
-          </div>
+              <button
+                id="btn-trigger-view-admins"
+                onClick={() => {
+                  setShowAdminsListModal(!showAdminsListModal);
+                  setShowAddAdmin(false);
+                }}
+                className="w-full sm:w-auto px-3.5 py-1.5 bg-slate-100/60 backdrop-blur-md hover:bg-slate-150/85 text-slate-600 rounded-md text-xs font-semibold shadow-xs transition inline-flex items-center justify-center gap-1.5 border border-slate-200 active:scale-95"
+              >
+                <Users className="w-3.5 h-3.5 text-slate-500" />
+                {showAdminsListModal ? "Ocultar Administradores" : "Ver Administradores Secundarios"}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Modal/Form inline to add new admin */}
@@ -1202,6 +1216,28 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                     ))}
                   </select>
                 </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Inicio de Soporte *</label>
+                  <input
+                    type="date"
+                    value={singleStudentStartDate}
+                    onChange={(e) => setSingleStudentStartDate(e.target.value)}
+                    className="w-full text-xs px-2.5 py-1.5 border border-slate-300 bg-white rounded-md focus:outline-none focus:ring-1 focus:ring-vino-claro/10 focus:border-vino-claro"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Fin de Soporte *</label>
+                  <input
+                    type="date"
+                    value={singleStudentEndDate}
+                    onChange={(e) => setSingleStudentEndDate(e.target.value)}
+                    className="w-full text-xs px-2.5 py-1.5 border border-slate-300 bg-white rounded-md focus:outline-none focus:ring-1 focus:ring-vino-claro/10 focus:border-vino-claro"
+                    required
+                  />
+                </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-1">
@@ -1243,7 +1279,31 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                   return (
                     <tr key={student.id} className="hover:bg-gray-55">
                       <td className="p-3.5 font-mono font-bold text-slate-900 bg-gray-55/40">{student.expediente}</td>
-                      <td className="p-3.5 font-semibold text-gray-800">{student.name}</td>
+                      <td className="p-3.5 font-semibold text-gray-800">
+                        <div className="flex items-center gap-1.5">
+                          <span>{student.name}</span>
+                          <button
+                            id={`btn-info-student-${student.id}`}
+                            type="button"
+                            onClick={() => {
+                              fetch(`/api/alumnos/${student.id}/repairs-count`)
+                                .then(r => r.json())
+                                .then(data => {
+                                  setInfoStudentRepairs(data.count || 0);
+                                  setInfoStudent(student);
+                                })
+                                .catch(() => {
+                                  setInfoStudentRepairs(0);
+                                  setInfoStudent(student);
+                                });
+                            }}
+                            className="p-1 rounded-full text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition duration-150"
+                            title="Ver información complementaria"
+                          >
+                            <Info className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
                       <td className="p-3.5 text-gray-500">
                         {student.career}
                         <span className="block text-[10px] font-mono font-medium">Semestre: {student.semester}°</span>
@@ -1944,15 +2004,15 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                 const pcRoom = rooms.find(r => r.id === pc.roomId);
                 const assignedStudent = alumnos.find(a => a.id === pc.assignedAlumnoId);
 
-                // State colors
-                let pcBadgeClass = "bg-gray-100 text-gray-800";
-                if (pc.state === "Operativo") pcBadgeClass = "bg-blue-50 text-blue-800";
-                else if (pc.state === "En mantenimiento") pcBadgeClass = "bg-amber-50 text-amber-800 border border-amber-200/50";
-                else if (pc.state === "Reparado") pcBadgeClass = "bg-emerald-50 text-emerald-850";
-                else if (pc.state === "Irreparable") pcBadgeClass = "bg-rose-50 text-rose-850";
+                // State colors (more vibrant!)
+                let pcBadgeClass = "bg-slate-200 text-slate-800";
+                if (pc.state === "Operativo") pcBadgeClass = "bg-blue-600 text-white font-bold shadow-sm";
+                else if (pc.state === "En mantenimiento") pcBadgeClass = "bg-amber-400 text-slate-900 font-bold border border-amber-300 shadow-sm";
+                else if (pc.state === "Reparado") pcBadgeClass = "bg-emerald-500 text-white font-bold shadow-sm";
+                else if (pc.state === "Irreparable") pcBadgeClass = "bg-rose-600 text-white font-bold shadow-sm";
 
                 return (
-                  <div key={pc.id} className="p-3.5 rounded-lg border border-slate-200 bg-white flex flex-col justify-between hover:border-slate-350 hover:shadow-sm transition duration-150">
+                  <div key={pc.id} className="p-3.5 rounded-lg border border-slate-200/90 bg-white/70 backdrop-blur-md flex flex-col justify-between hover:border-vino-claro hover:shadow-md transition duration-150 shadow-sm">
                     <div>
                       <div className="flex justify-between items-center mb-2">
                         <span className="font-mono font-bold text-slate-800 text-xs flex items-center gap-1.5">
@@ -2055,6 +2115,86 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
             </div>
             <div className="text-center text-xs text-slate-300 py-2.5 font-semibold font-sans tracking-tight">
               🔍 Evidencia Técnica Cargada por el Alumno
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Student credentials and detailed support date modal */}
+      {infoStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
+          <div className="bg-white border border-slate-250 rounded-xl max-w-sm w-full p-5 shadow-2xl relative text-slate-800 animate-slide-up">
+            <button
+              onClick={() => setInfoStudent(null)}
+              className="absolute top-3.5 right-3.5 p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition duration-150"
+            >
+              ✕
+            </button>
+
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-gray-150">
+              <div className="w-9 h-9 bg-vino-claro/10 text-vino-claro rounded-lg flex items-center justify-center font-bold text-sm">
+                {infoStudent.name.charAt(0)}
+              </div>
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">Expediente Alumno</h3>
+                <p className="text-sm font-extrabold text-slate-950 font-mono mt-0.5">{infoStudent.expediente}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 font-sans text-xs">
+              <div className="space-y-1">
+                <span className="text-slate-500 font-medium">Nombre Completo:</span>
+                <span className="block font-bold text-slate-900 bg-slate-50 px-2 py-1.5 rounded border border-slate-100">
+                  {infoStudent.name}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3.5">
+                <div>
+                  <span className="text-slate-500 font-medium">Carrera Académica:</span>
+                  <span className="block font-semibold text-slate-800 mt-1">{infoStudent.career}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-medium">Semestre:</span>
+                  <span className="block font-semibold text-slate-800 mt-1">{infoStudent.semester}° Semestre</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3.5 pt-1.5 border-t border-slate-50">
+                <div>
+                  <span className="text-slate-500 font-medium">Inicio de Soporte:</span>
+                  <span className="block font-mono font-bold text-emerald-600 bg-emerald-50 text-center py-1 rounded border border-emerald-100 mt-1 col-span-1">
+                    {infoStudent.startDate || "No registrado"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-medium">Fin de Soporte:</span>
+                  <span className="block font-mono font-bold text-rose-600 bg-rose-50 text-center py-1 rounded border border-rose-100 mt-1 col-span-1">
+                    {infoStudent.endDate || "No registrado"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex justify-between items-center bg-blue-50/50 p-2.5 rounded-lg border border-blue-100 mt-1">
+                  <div>
+                    <span className="text-[10px] text-blue-800 font-bold block uppercase tracking-wider">Computadoras Reparadas</span>
+                    <span className="text-xs text-slate-600">Total en este período</span>
+                  </div>
+                  <span className="text-lg font-black text-blue-900 font-mono bg-white w-8 h-8 rounded-full border border-blue-150 flex items-center justify-center shadow-xs">
+                    {infoStudentRepairs}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2.5 mt-5">
+              <button
+                onClick={() => setInfoStudent(null)}
+                className="px-4 py-1.5 bg-vino-claro hover:bg-vino-claro-hover text-white rounded-md text-xs font-bold leading-snug transition duration-150 active:scale-95 shadow-sm"
+              >
+                Cerrar Ventana
+              </button>
             </div>
           </div>
         </div>

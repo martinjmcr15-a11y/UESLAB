@@ -30,6 +30,8 @@ export interface Alumno {
   expediente: string;
   password: string;
   groupId: string | null;
+  startDate?: string;
+  endDate?: string;
 }
 
 export interface MaintenanceLog {

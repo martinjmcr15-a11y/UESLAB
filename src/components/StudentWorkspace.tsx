@@ -2,10 +2,11 @@ import React, { useState, useEffect } from "react";
 import { Alumno, Group, Room, PC, SparePart, MaintenanceLog } from "../types";
 import { 
   LogOut, Laptop, CheckCircle, AlertTriangle, Clock, Wrench, Search, 
-  Sparkles, FileText, Upload, Calendar, Send, ChevronRight, Ban, RefreshCw 
+  Sparkles, FileText, Upload, Calendar, Send, ChevronRight, Ban, RefreshCw, Info
 } from "lucide-react";
 import ComputerHistoryModal from "./ComputerHistoryModal";
 import InventoryCatalog from "./InventoryCatalog";
+import NeonStatusIndicator from "./NeonStatusIndicator";
 import { jsPDF } from "jspdf";
 
 interface StudentWorkspaceProps {
@@ -27,6 +28,8 @@ export default function StudentWorkspace({
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPc, setSelectedPc] = useState<PC | null>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [studentRepairs, setStudentRepairs] = useState(0);
 
   // History modal trigger
   const [historyPc, setHistoryPc] = useState<{ id: string; tag: string } | null>(null);
@@ -429,22 +432,38 @@ export default function StudentWorkspace({
             </div>
             <div>
               <span className="text-[9px] font-bold text-white/80 block tracking-wider font-mono uppercase">Universidad Estatal de Sonora</span>
-              <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-1">
-                UesLab <span className="text-white/70 font-normal text-xs">v2.0</span>
+              <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
+                UesLab
+                <NeonStatusIndicator />
               </h1>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="hidden md:flex flex-col items-end">
-              <span className="text-xs font-semibold text-slate-100 line-clamp-1">{alumno.name}</span>
-              <span className="text-[10px] text-blue-300 font-mono">Folio: {group?.folio || "Sin grupo"}</span>
-            </div>
+            <button
+              id="student-profile-glass-btn"
+              type="button"
+              onClick={async () => {
+                try {
+                  const r = await fetch(`/api/alumnos/${alumno.id}/repairs-count`);
+                  const d = await r.json();
+                  setStudentRepairs(d.count || 0);
+                } catch {
+                  setStudentRepairs(0);
+                }
+                setShowProfileModal(true);
+              }}
+              className="px-3.5 py-1 text-xs text-white bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-md border border-white/20 transition active:scale-95 shadow-sm inline-flex flex-col items-end cursor-pointer"
+              title="Mi Diagnóstico de Servicio Social"
+            >
+              <span className="font-bold">{alumno.name}</span>
+              <span className="text-[8.5px] text-emerald-300 font-mono tracking-wider font-bold uppercase">Mi Info • Ver Detalle</span>
+            </button>
 
             <button
               id="student-logout-top"
               onClick={onLogout}
-              className="px-3 py-1.5 text-xs font-semibold text-slate-200 hover:text-white bg-slate-850/60 backdrop-blur-md hover:bg-slate-800 rounded-md border border-slate-700/80 hover:border-slate-600 transition inline-flex items-center gap-1.5 shadow duration-150 active:scale-95"
+              className="px-3 py-1.5 text-xs font-semibold text-white bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-md border border-white/20 transition inline-flex items-center gap-1.5 shadow duration-150 active:scale-95"
               title="Cerrar Sesión"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -1053,6 +1072,91 @@ export default function StudentWorkspace({
           roomName={room?.name || "Salón"}
           onClose={() => setHistoryPc(null)}
         />
+      )}
+
+      {/* Student self profile modal with backdrop blur */}
+      {showProfileModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
+          <div className="bg-white border border-slate-250 rounded-xl max-w-sm w-full p-5 shadow-2xl relative text-slate-800 animate-slide-up">
+            <button
+              onClick={() => setShowProfileModal(false)}
+              className="absolute top-3.5 right-3.5 p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition duration-150 font-bold"
+            >
+              ✕
+            </button>
+
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
+              <div className="w-9 h-9 bg-vino-claro/10 text-vino-claro rounded-lg flex items-center justify-center font-bold text-sm">
+                🎓
+              </div>
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">Mi Expediente</h3>
+                <p className="text-sm font-extrabold text-slate-950 font-mono mt-0.5">{alumno.expediente}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 font-sans text-xs">
+              <div className="space-y-1">
+                <span className="text-slate-500 font-medium">Nombre de Alumno:</span>
+                <span className="block font-bold text-slate-900 bg-slate-50 px-2 py-1.5 rounded border border-slate-100">
+                  {alumno.name}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <span className="text-slate-500">Carrera:</span>
+                  <span className="block font-semibold text-slate-800 mt-1">{alumno.career}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Semestre:</span>
+                  <span className="block font-semibold text-slate-800 mt-1">{alumno.semester}° Semestre</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-2.5 border-t border-slate-50">
+                <div>
+                  <span className="text-slate-500">Registro de Soporte:</span>
+                  <span className="block font-mono font-bold text-emerald-600 bg-emerald-50 text-center py-1 rounded border border-emerald-100 mt-1">
+                    {alumno.startDate || "No especificado"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Fecha de Término:</span>
+                  <span className="block font-mono font-bold text-rose-600 bg-rose-50 text-center py-1 rounded border border-rose-100 mt-1">
+                    {alumno.endDate || "No especificado"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex justify-between items-center bg-blue-50/55 p-3 rounded-lg border border-blue-100 mt-1">
+                  <div>
+                    <span className="text-[10px] text-blue-850 font-extrabold block uppercase tracking-wider">Computadoras Reparadas</span>
+                    <span className="text-slate-500 text-[11px]">Total acumulado</span>
+                  </div>
+                  <span className="text-lg font-black text-blue-900 font-mono bg-white w-9 h-9 rounded-full border border-blue-150 flex items-center justify-center shadow-xs">
+                    {studentRepairs}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-2.5 bg-slate-50 rounded border border-slate-150 text-[10px] text-slate-500 leading-relaxed font-mono mt-1 flex justify-between items-center">
+                <span>Mi Folio de Grupo:</span>
+                <span className="bg-slate-200 px-1.5 py-0.5 rounded text-slate-800 font-bold block">{group?.folio || "Sin grupo"}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-5 pt-1.5">
+              <button
+                onClick={() => setShowProfileModal(false)}
+                className="px-4 py-1.5 bg-vino-claro hover:bg-vino-claro-hover text-white rounded-md text-xs font-bold transition duration-150 active:scale-95 shadow-sm"
+              >
+                Cerrar Ventana
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* FOOTER */}

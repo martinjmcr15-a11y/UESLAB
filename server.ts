@@ -347,6 +347,44 @@ app.post("/api/auth/login", (req, res) => {
   return res.status(401).json({ error: "Credenciales de acceso incorrectas. Verifique expediente y contraseña." });
 });
 
+// Neon Postgres State / Status indicator API
+app.get("/api/db-status", async (req, res) => {
+  try {
+    const start = Date.now();
+    await pool.query("SELECT 1");
+    const latency = Date.now() - start;
+    res.json({
+      status: "connected",
+      engine: "Neon PostgreSQL (AWS East 1)",
+      host: "ep-broad-bar-atk7zcar-pooler.c-9.us-east-1.aws.neon.tech",
+      database: "neondb",
+      latency: `${latency}ms`,
+      initialized: clientInitialized,
+      cached: !!cachedDb,
+      error: null
+    });
+  } catch (err: any) {
+    res.json({
+      status: "disconnected",
+      engine: "Local Fallback State (db.json)",
+      host: "ep-broad-bar-atk7zcar-pooler.c-9.us-east-1.aws.neon.tech",
+      database: "neondb",
+      latency: null,
+      initialized: clientInitialized,
+      cached: !!cachedDb,
+      error: err.message || "No se pudo conectar al servidor de base de datos Neon."
+    });
+  }
+});
+
+// Retrieve completed repairs count for a specific student easily
+app.get("/api/alumnos/:id/repairs-count", (req, res) => {
+  const { id } = req.params;
+  const db = readDb();
+  const studentLogs = (db.logs || []).filter((l: any) => l.studentId === id && l.type === "Reparado");
+  res.json({ count: studentLogs.length });
+});
+
 // Rooms Endpoints
 app.get("/api/rooms", (req, res) => {
   const db = readDb();
@@ -493,7 +531,7 @@ app.get("/api/alumnos", (req, res) => {
 
 // Register individual student
 app.post("/api/alumnos", (req, res) => {
-  const { name, career, semester, expediente, password, groupId } = req.body;
+  const { name, career, semester, expediente, password, groupId, startDate, endDate } = req.body;
   if (!name || !expediente || !password) {
     return res.status(400).json({ error: "Nombre, expediente y contraseña son obligatorios de registrar." });
   }
@@ -512,7 +550,9 @@ app.post("/api/alumnos", (req, res) => {
     semester: parseInt(semester, 10) || 1,
     expediente: expediente,
     password: password,
-    groupId: groupId || null
+    groupId: groupId || null,
+    startDate: startDate || null,
+    endDate: endDate || null
   };
 
   db.alumnos.push(newStudent);
@@ -523,7 +563,7 @@ app.post("/api/alumnos", (req, res) => {
 // Reset or change student credentials
 app.put("/api/alumnos/:id", (req, res) => {
   const { id } = req.params;
-  const { name, career, semester, expediente, password } = req.body;
+  const { name, career, semester, expediente, password, startDate, endDate } = req.body;
 
   const db = readDb();
   const student = db.alumnos.find((a) => a.id === id);
@@ -536,6 +576,8 @@ app.put("/api/alumnos/:id", (req, res) => {
   if (semester !== undefined) student.semester = Number(semester);
   if (expediente !== undefined) student.expediente = expediente;
   if (password !== undefined) student.password = password;
+  if (startDate !== undefined) student.startDate = startDate;
+  if (endDate !== undefined) student.endDate = endDate;
 
   writeDb(db);
   res.json(student);
@@ -717,6 +759,12 @@ app.delete("/api/pcs/:id", (req, res) => {
 
 // Endpoint to Register and obtain admins list (securely sanitizing sensitive credentials)
 app.get("/api/auth/admins", (req, res) => {
+  const adminExpediente = String(req.query.adminExpediente || "");
+  if (adminExpediente !== "admin") {
+    // Secondary admins or other users cannot view our admin list
+    return res.json([]);
+  }
+
   const db = readDb();
   const rawList = db.admins || [];
   const sanitizedList = rawList.map((adm: any) => ({
@@ -730,6 +778,11 @@ app.get("/api/auth/admins", (req, res) => {
 });
 
 app.delete("/api/auth/admins/:id", (req, res) => {
+  const adminExpediente = String(req.query.adminExpediente || "");
+  if (adminExpediente !== "admin") {
+    return res.status(403).json({ error: "No autorizado. Solo el administrador principal puede eliminar administradores." });
+  }
+
   const { id } = req.params;
   if (id === "admin-default") {
     return res.status(400).json({ error: "No se puede eliminar el administrador principal por motivos de seguridad escolar." });
@@ -748,6 +801,11 @@ app.delete("/api/auth/admins/:id", (req, res) => {
 });
 
 app.post("/api/auth/register-admin", (req, res) => {
+  const adminExpediente = String(req.query.adminExpediente || "");
+  if (adminExpediente !== "admin") {
+    return res.status(403).json({ error: "No autorizado. Solo el administrador principal puede registrar nuevos administradores." });
+  }
+
   const { name, expediente, password } = req.body;
   if (!name || !expediente || !password) {
     return res.status(400).json({ error: "Nombre, expediente y contraseña son obligatorios de registrar para un Administrador." });
