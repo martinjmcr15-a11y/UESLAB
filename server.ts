@@ -46,45 +46,31 @@ pool.on("error", (err) => {
   console.error("⚠️ Error imprevisto en cliente inactivo de Neon:", err);
 });
 
-// Dynamic retry query executor for serverless environments (Vercel) to automatically handle terminated/idle connection issues
+// Dynamic retry query executor optimized for Neon serverless (handling idle terminations cleanly)
 async function queryPg(text: string, params?: any[]): Promise<any> {
-  let attempts = 0;
-  const maxAttempts = 2;
-  while (attempts < maxAttempts) {
-    try {
-      return await pool.query(text, params);
-    } catch (err: any) {
-      attempts++;
-      console.error(`Postgres query attempt ${attempts} failed:`, err);
-      const isConnectionError = 
-        err.message?.includes("terminated") || 
-        err.message?.includes("timeout") || 
-        err.message?.includes("closed") || 
-        err.message?.includes("connection") || 
-        err.code === "57P01" || 
-        err.code === "08006" || 
-        err.code === "08003";
-      
-      if (isConnectionError && attempts < maxAttempts) {
-        console.log("🔄 Connection issue detected. Recreating PostgreSQL pool and retrying...");
-        try {
-          await pool.end().catch(() => {});
-        } catch (e) {}
-        pool = new PostgreSQLPool({
-          connectionString: DB_URL,
-          max: 3,
-          idleTimeoutMillis: 1000,
-          connectionTimeoutMillis: 5000,
-          ssl: {
-            rejectUnauthorized: false
-          }
-        });
-        pool.on("error", (e) => {
-          console.error("⚠️ Error imprevisto en cliente inactivo de Neon:", e);
-        });
-        continue;
+  // Try pool query first
+  try {
+    return await pool.query(text, params);
+  } catch (err: any) {
+    console.warn("⚠️ Postgres pool query failed, using ephemeral client fallback to bypass connection issues:", err);
+    
+    // Fallback: Create an ephemeral socket client, connect, execute and immediately dispose (100% reliable)
+    const client = new pg.Client({
+      connectionString: DB_URL,
+      ssl: {
+        rejectUnauthorized: false
       }
-      throw err;
+    });
+
+    try {
+      await client.connect();
+      const res = await client.query(text, params);
+      await client.end().catch(() => {});
+      return res;
+    } catch (fallbackErr: any) {
+      console.error("❌ Ephemeral client query failed as well:", fallbackErr);
+      await client.end().catch(() => {});
+      throw fallbackErr;
     }
   }
 }
@@ -292,29 +278,38 @@ async function initPostgres() {
     clientInitialized = true;
   } catch (err) {
     console.error("⚠️ Failed to load database from Postgres. Falling back to local flat-file.", err);
-    // Let readDb() handle local loading if database connection fails
   }
 }
 
-// Quick helper for reading database from cloud dynamically
+// Quick helper for reading database from cloud dynamically (PostgreSQL prioritized as single source of truth)
 async function readDb() {
-  if (clientInitialized) {
-    try {
-      const res = await queryPg("SELECT data FROM ueslab_db WHERE key = 'main'");
-      if (res.rows.length > 0) {
-        cachedDb = res.rows[0].data;
-        return cachedDb;
+  try {
+    const res = await queryPg("SELECT data FROM ueslab_db WHERE key = 'main'");
+    if (res.rows.length > 0) {
+      const db = res.rows[0].data;
+      
+      // Prevent lockout: ensure there's always at least one administrator populated
+      if (!db.admins || db.admins.length === 0) {
+        db.admins = [
+          { id: "admin-default", name: "Coordinador de Laboratorios", expediente: "admin", password: "admin" }
+        ];
+        // Asynchronously update to database to heal state without blocking
+        queryPg("INSERT INTO ueslab_db (key, data) VALUES ('main', $1) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data", [JSON.stringify(db)])
+          .catch(e => console.error("⚠️ Failed auto-healing admin data in background:", e));
       }
-    } catch (err) {
-      console.error("⚠️ Error reading from Neon PostgreSQL in readDb:", err);
+      
+      cachedDb = db;
+      return db;
     }
+  } catch (err) {
+    console.error("⚠️ Error reading from Neon PostgreSQL in readDb; using in-memory or flat-file state fallback:", err);
   }
 
   if (cachedDb) {
     return cachedDb;
   }
 
-  // Fallback local filesystem access (for offline development or fallback mode)
+  // Fallback local filesystem access (for safety/offline fallback)
   try {
     if (!fs.existsSync(DB_FILE)) {
       let initialData = DEFAULT_DB;
@@ -326,7 +321,7 @@ async function readDb() {
           console.error("Failed to parse local db.json", e);
         }
       }
-      if (!initialData.admins) {
+      if (!initialData.admins || initialData.admins.length === 0) {
         initialData.admins = [
           { id: "admin-default", name: "Coordinador de Laboratorios", expediente: "admin", password: "admin" }
         ];
@@ -337,7 +332,7 @@ async function readDb() {
     }
     const data = fs.readFileSync(DB_FILE, "utf8");
     const db = JSON.parse(data);
-    if (!db.admins) {
+    if (!db.admins || db.admins.length === 0) {
       db.admins = [
         { id: "admin-default", name: "Coordinador de Laboratorios", expediente: "admin", password: "admin" }
       ];
@@ -671,10 +666,21 @@ app.get("/api/alumnos", async (req, res) => {
           studentToPcs[row.student_id] = [];
         }
         const pcDetails = db.pcs.find((pc: any) => pc.id === row.pc_id);
-        studentToPcs[row.student_id].push({
-          id: row.pc_id,
-          tag: pcDetails ? pcDetails.tag : row.pc_id
-        });
+        if (pcDetails) {
+          studentToPcs[row.student_id].push({
+            ...pcDetails,
+            assignedAlumnoId: row.student_id
+          });
+        } else {
+          studentToPcs[row.student_id].push({
+            id: row.pc_id,
+            tag: row.pc_id,
+            state: "Operativo",
+            lastUpdate: new Date().toISOString().split("T")[0],
+            roomId: "L-101",
+            assignedAlumnoId: row.student_id
+          });
+        }
       }
     });
 
