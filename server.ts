@@ -32,7 +32,7 @@ const DB_FILE = process.env.VERCEL
 const PostgreSQLPool = pg.Pool;
 const DB_URL = process.env.DATABASE_URL || "postgresql://neondb_owner:npg_kVTNW5Ge3hCH@ep-broad-bar-atk7zcar-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require";
 
-const pool = new PostgreSQLPool({
+let pool = new PostgreSQLPool({
   connectionString: DB_URL,
   max: 3,                 // Reducido para evitar el agotamiento de conexiones en entornos Serverless
   idleTimeoutMillis: 1000, // Liberar conexiones inactivas de inmediato para evitar bloqueos por expiración de sockets
@@ -45,6 +45,49 @@ const pool = new PostgreSQLPool({
 pool.on("error", (err) => {
   console.error("⚠️ Error imprevisto en cliente inactivo de Neon:", err);
 });
+
+// Dynamic retry query executor for serverless environments (Vercel) to automatically handle terminated/idle connection issues
+async function queryPg(text: string, params?: any[]): Promise<any> {
+  let attempts = 0;
+  const maxAttempts = 2;
+  while (attempts < maxAttempts) {
+    try {
+      return await pool.query(text, params);
+    } catch (err: any) {
+      attempts++;
+      console.error(`Postgres query attempt ${attempts} failed:`, err);
+      const isConnectionError = 
+        err.message?.includes("terminated") || 
+        err.message?.includes("timeout") || 
+        err.message?.includes("closed") || 
+        err.message?.includes("connection") || 
+        err.code === "57P01" || 
+        err.code === "08006" || 
+        err.code === "08003";
+      
+      if (isConnectionError && attempts < maxAttempts) {
+        console.log("🔄 Connection issue detected. Recreating PostgreSQL pool and retrying...");
+        try {
+          await pool.end().catch(() => {});
+        } catch (e) {}
+        pool = new PostgreSQLPool({
+          connectionString: DB_URL,
+          max: 3,
+          idleTimeoutMillis: 1000,
+          connectionTimeoutMillis: 5000,
+          ssl: {
+            rejectUnauthorized: false
+          }
+        });
+        pool.on("error", (e) => {
+          console.error("⚠️ Error imprevisto en cliente inactivo de Neon:", e);
+        });
+        continue;
+      }
+      throw err;
+    }
+  }
+}
 
 let cachedDb: any = null;
 let clientInitialized = false;
@@ -188,18 +231,41 @@ async function initPostgres() {
   if (clientInitialized) return;
   try {
     // 1. Create table if not exists with a schema storing structured json document
-    await pool.query(`
+    await queryPg(`
       CREATE TABLE IF NOT EXISTS ueslab_db (
         key VARCHAR(50) PRIMARY KEY,
         data JSONB
       )
     `);
 
+    // Create direct relation table for PC assignments for immediate Neon database speed & zero caching
+    await queryPg(`
+      CREATE TABLE IF NOT EXISTS pc_assignments (
+        pc_id VARCHAR(100) PRIMARY KEY,
+        student_id VARCHAR(100),
+        last_update VARCHAR(50)
+      )
+    `);
+
     // 2. Load the data
-    const res = await pool.query("SELECT data FROM ueslab_db WHERE key = 'main'");
+    const res = await queryPg("SELECT data FROM ueslab_db WHERE key = 'main'");
     if (res.rows.length > 0) {
       cachedDb = res.rows[0].data;
       console.log("💚 Successfully loaded and synchronized database state from Neon PostgreSQL.");
+      
+      // Auto-synchronize relational table with any existing assignments from loaded JSON
+      if (cachedDb && Array.isArray(cachedDb.pcs)) {
+        for (const pc of cachedDb.pcs) {
+          if (pc.assignedAlumnoId) {
+            await queryPg(
+              `INSERT INTO pc_assignments (pc_id, student_id, last_update) 
+               VALUES ($1, $2, $3) 
+               ON CONFLICT (pc_id) DO NOTHING`,
+              [pc.id, pc.assignedAlumnoId, pc.lastUpdate || new Date().toISOString().split("T")[0]]
+            ).catch(e => console.error("Error seeding assignment row", e));
+          }
+        }
+      }
     } else {
       // Seed the cloud database
       let initialData = DEFAULT_DB;
@@ -219,7 +285,7 @@ async function initPostgres() {
         ];
       }
 
-      await pool.query("INSERT INTO ueslab_db (key, data) VALUES ('main', $1) ON CONFLICT (key) DO NOTHING", [JSON.stringify(initialData)]);
+      await queryPg("INSERT INTO ueslab_db (key, data) VALUES ('main', $1) ON CONFLICT (key) DO NOTHING", [JSON.stringify(initialData)]);
       cachedDb = initialData;
       console.log("🌱 Seeded initial database state to Neon PostgreSQL.");
     }
@@ -234,7 +300,7 @@ async function initPostgres() {
 async function readDb() {
   if (clientInitialized) {
     try {
-      const res = await pool.query("SELECT data FROM ueslab_db WHERE key = 'main'");
+      const res = await queryPg("SELECT data FROM ueslab_db WHERE key = 'main'");
       if (res.rows.length > 0) {
         cachedDb = res.rows[0].data;
         return cachedDb;
@@ -297,7 +363,7 @@ async function writeDb(data: typeof DEFAULT_DB) {
 
   // 2. Synchronize to Neon PostgreSQL database and await completion (critical for Serverless)
   try {
-    await pool.query("INSERT INTO ueslab_db (key, data) VALUES ('main', $1) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data", [JSON.stringify(data)]);
+    await queryPg("INSERT INTO ueslab_db (key, data) VALUES ('main', $1) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data", [JSON.stringify(data)]);
     console.log("💾 Database successfully saved & synchronized to PostgreSQL.");
   } catch (err) {
     console.error("⚠️ Failed to synchronize database state to PostgreSQL.", err);
@@ -375,7 +441,7 @@ app.post("/api/auth/login", async (req, res) => {
 app.get("/api/db-status", async (req, res) => {
   try {
     const start = Date.now();
-    await pool.query("SELECT 1");
+    await queryPg("SELECT 1");
     const latency = Date.now() - start;
     res.json({
       status: "connected",
@@ -447,25 +513,67 @@ app.post("/api/rooms", async (req, res) => {
 // PCs Endpoints
 app.get("/api/pcs", async (req, res) => {
   const db = await readDb();
-  res.json(db.pcs);
+  
+  // Direct relational query to Neon to bypass any cache/sync delay completely
+  try {
+    const assignmentsRes = await queryPg("SELECT pc_id, student_id, last_update FROM pc_assignments");
+    const assignmentsMap = new Map<string, { studentId: any; lastUpdate: any }>(assignmentsRes.rows.map(r => [r.pc_id, { studentId: r.student_id, lastUpdate: r.last_update }]));
+    
+    const verifiedPcs = db.pcs.map((pc: any) => {
+      if (assignmentsMap.has(pc.id)) {
+        const assign = assignmentsMap.get(pc.id)!;
+        return {
+          ...pc,
+          assignedAlumnoId: assign.studentId,
+          lastUpdate: assign.lastUpdate || pc.lastUpdate
+        };
+      } else {
+        return {
+          ...pc,
+          assignedAlumnoId: null
+        };
+      }
+    });
+    res.json(verifiedPcs);
+  } catch (err) {
+    console.error("⚠️ Failed to merge PC assignments from SQL, returning cached fallback:", err);
+    res.json(db.pcs);
+  }
 });
 
 // Assign a Specific PC to a specific student
 app.put("/api/pcs/:id/assign", async (req, res) => {
   const { id } = req.params;
   const { assignedAlumnoId } = req.body; // Can be string or null
+  const todayStr = new Date().toISOString().split("T")[0];
 
-  const db = await readDb();
-  const pc = db.pcs.find((p) => p.id === id);
-  if (!pc) {
-    return res.status(404).json({ error: "Computadora no encontrada" });
+  // 1. Direct connection SQL sync - fast and durable
+  try {
+    if (assignedAlumnoId) {
+      await queryPg(
+        `INSERT INTO pc_assignments (pc_id, student_id, last_update) 
+         VALUES ($1, $2, $3) 
+         ON CONFLICT (pc_id) 
+         DO UPDATE SET student_id = EXCLUDED.student_id, last_update = EXCLUDED.last_update`,
+        [id, assignedAlumnoId, todayStr]
+      );
+    } else {
+      await queryPg(`DELETE FROM pc_assignments WHERE pc_id = $1`, [id]);
+    }
+  } catch (err) {
+    console.error("⚠️ Failed direct assignment SQL write:", err);
   }
 
-  pc.assignedAlumnoId = assignedAlumnoId || null;
-  pc.lastUpdate = new Date().toISOString().split("T")[0];
+  // 2. Fallback JSON file sync
+  const db = await readDb();
+  const pc = db.pcs.find((p) => p.id === id);
+  if (pc) {
+    pc.assignedAlumnoId = assignedAlumnoId || null;
+    pc.lastUpdate = todayStr;
+    await writeDb(db);
+  }
 
-  await writeDb(db);
-  res.json(pc);
+  res.json(pc || { id, assignedAlumnoId: assignedAlumnoId || null, lastUpdate: todayStr });
 });
 
 // Get Clinical history logs of a certain PC
@@ -550,7 +658,43 @@ app.post("/api/groups", async (req, res) => {
 // Alumnos Endpoints
 app.get("/api/alumnos", async (req, res) => {
   const db = await readDb();
-  res.json(db.alumnos);
+  
+  // Directly query the persistent pc_assignments table from Neon to bypass any JSON sync lag
+  try {
+    const assignmentsRes = await queryPg("SELECT pc_id, student_id FROM pc_assignments");
+    
+    // Map of studentId -> list of assigned direct PC tags/details
+    const studentToPcs: Record<string, any[]> = {};
+    assignmentsRes.rows.forEach(row => {
+      if (row.student_id) {
+        if (!studentToPcs[row.student_id]) {
+          studentToPcs[row.student_id] = [];
+        }
+        const pcDetails = db.pcs.find((pc: any) => pc.id === row.pc_id);
+        studentToPcs[row.student_id].push({
+          id: row.pc_id,
+          tag: pcDetails ? pcDetails.tag : row.pc_id
+        });
+      }
+    });
+
+    const enrichedAlumnos = db.alumnos.map((student: any) => ({
+      ...student,
+      assignedPcs: studentToPcs[student.id] || []
+    }));
+    res.json(enrichedAlumnos);
+  } catch (err) {
+    console.error("⚠️ Failed to join and enrich alumnos with assignments:", err);
+    // Fallback logic
+    const fallbackAlumnos = db.alumnos.map((student: any) => {
+      const myPcs = db.pcs.filter((p: any) => p.assignedAlumnoId === student.id).map((p: any) => ({ id: p.id, tag: p.tag }));
+      return {
+        ...student,
+        assignedPcs: myPcs
+      };
+    });
+    res.json(fallbackAlumnos);
+  }
 });
 
 // Register individual student
@@ -610,6 +754,15 @@ app.put("/api/alumnos/:id", async (req, res) => {
 // Delete student registration
 app.delete("/api/alumnos/:id", async (req, res) => {
   const { id } = req.params;
+  
+  // 1. Relational SQL delete
+  try {
+    await queryPg("DELETE FROM pc_assignments WHERE student_id = $1", [id]);
+  } catch (err) {
+    console.error("⚠️ Failed direct relational delete on student removal:", err);
+  }
+
+  // 2. Local/JSON state sync
   const db = await readDb();
   db.alumnos = db.alumnos.filter((a) => a.id !== id);
   
@@ -751,6 +904,16 @@ app.delete("/api/inventory/:id", async (req, res) => {
 // Delete room/laboratory and all its PCs
 app.delete("/api/rooms/:id", async (req, res) => {
   const { id } = req.params;
+  
+  // 1. Relational SQL cascaded deletions of assignments
+  try {
+    // Delete assignments for all PCs belonging to this room code prefix
+    await queryPg("DELETE FROM pc_assignments WHERE pc_id LIKE $1", [`${id}%`]);
+  } catch (err) {
+    console.error("⚠️ Failed direct relational delete on room removal:", err);
+  }
+
+  // 2. Local state sync
   const db = await readDb();
   db.rooms = db.rooms.filter((r) => r.id !== id);
   db.pcs = db.pcs.filter((pc) => pc.roomId !== id);
@@ -775,6 +938,15 @@ app.delete("/api/groups/:id", async (req, res) => {
 // Delete computer entirely
 app.delete("/api/pcs/:id", async (req, res) => {
   const { id } = req.params;
+
+  // 1. Clean from relational pc_assignments table
+  try {
+    await queryPg("DELETE FROM pc_assignments WHERE pc_id = $1", [id]);
+  } catch (err) {
+    console.error("⚠️ Failed direct relational delete on PC removal:", err);
+  }
+
+  // 2. Local state sync
   const db = await readDb();
   db.pcs = db.pcs.filter((pc) => pc.id !== id);
   await writeDb(db);
